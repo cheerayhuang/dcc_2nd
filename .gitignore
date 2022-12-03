@@ -2,7 +2,16 @@
 
 !.gitignore
 
-! /demos/
-! /demos/**/
+!/demos/
+!/demos/**/
+!util/
+!protocol/
 
+!*.arrow
+
+!*.cpp
+!*.cc
+!*.h
+!*.hpp
+!*.cxx
 
