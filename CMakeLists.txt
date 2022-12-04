@@ -36,8 +36,8 @@ target_link_libraries(${PROJECT_NAME} gflags.a)
 target_link_libraries(${PROJECT_NAME} jemalloc.a)
 target_link_libraries(${PROJECT_NAME} -lspdlog)
 target_link_libraries(${PROJECT_NAME} zstd.a)
-target_link_libraries(${PROJECT_NAME2} -lpthread)
-target_link_libraries(${PROJECT_NAME2} -ldl)
+target_link_libraries(${PROJECT_NAME} -lpthread)
+target_link_libraries(${PROJECT_NAME} -ldl)
 
 target_include_directories(${PROJECT_NAME}
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}

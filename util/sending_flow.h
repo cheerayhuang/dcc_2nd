@@ -255,10 +255,10 @@ public:
                     std::string_view res{read_buf, static_cast<size_t>(num_read)};
                     SPDLOG_INFO("Supervisor res: {}", res);
 
-                    if (res.find("E") != std::string::npos) {
+                    if (res.find("E\0") != std::string::npos) {
                         time_point end = std::chrono::steady_clock::now();
                         SPDLOG_WARN("[duration:{}]", std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()/1000);
-                        res = res.substr(5);
+                        res = res.substr(2);
                     }
                     if (res.find("strings2:") != std::string::npos) {
                         SPDLOG_WARN("[validString:{}]", res);

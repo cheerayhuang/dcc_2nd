@@ -312,7 +312,7 @@ public:
                     split_len_ = file_size_ / slices_num_;
 
                     if (split_len_ > 1024*1024) {
-                        reads_max_bytes_ = 4 * 1024 * 1024 + 1;
+                        reads_max_bytes_ = 6 * 1024 * 1024;
                     } else {
                         reads_max_bytes_ = 128 * 1024;
                     }
