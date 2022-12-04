@@ -22,6 +22,8 @@
 #include <pthread.h>
 #include <signal.h>
 
+#include <iostream>
+
 #define IP "192.168.102.174"
 #define PORT 7000
 
@@ -71,6 +73,8 @@ int main()
     inet_pton(AF_INET, "127.0.0.1", &local_addr.sin_addr);
     local_addr.sin_port = htons(10049);
     bind(skfd, reinterpret_cast<sockaddr*>(&local_addr), sizeof(local_addr));
+
+    std::cout << "skfd: " << skfd << std::endl;
 
 	/*这里需要填写服务器的端口号和IP地址，此时客户端会自己分配端口号和自己的IP发送给服务器*/
 	struct sockaddr_in addr;

@@ -16,6 +16,10 @@
 
 #include "threadpool.h"
 
+#include <spdlog/spdlog.h>
+#include "spdlog/sinks/stdout_color_sinks.h"
+
+
 using namespace std::literals;
 
 const char* IP = "127.0.0.1";
@@ -41,6 +45,9 @@ class Job {
 public:
 
 void job(int conn_fd, sockaddr_in addr, size_t addr_len, const std::string& op) {
+
+    SPDLOG_INFO("running a job...");
+
     char c_ip[32]{0};
     bzero(c_ip, 20);
     inet_ntop(AF_INET, &addr.sin_addr, c_ip, 20);
@@ -48,6 +55,7 @@ void job(int conn_fd, sockaddr_in addr, size_t addr_len, const std::string& op) 
     std::cout << "Run a job for the clinet: " << c_ip << ":" << port << std::endl;
 
     auto epoll_job_fd = epoll_create1(0);
+    std::cout << "epoll_job_fd: " << epoll_job_fd << std::endl;
 
     epoll_event ev, events[2];
     ev.events = EPOLLIN | EPOLLET;
@@ -58,6 +66,8 @@ void job(int conn_fd, sockaddr_in addr, size_t addr_len, const std::string& op) 
         exit(EXIT_FAILURE);
     }
     setnonblocking(conn_fd);
+
+    std::cout << "conn_fd:" << conn_fd << std::endl;
 
     for(;;) {
         auto nfds = epoll_wait(epoll_job_fd, events, 1, -1);
@@ -134,6 +144,11 @@ void job(int conn_fd, sockaddr_in addr, size_t addr_len, const std::string& op) 
 };
 
 int main() {
+
+    spdlog::set_pattern("[send %t] %+ ");
+    spdlog::set_level(spdlog::level::info);
+    spdlog::flush_every(std::chrono::seconds(2));
+
 
     sockaddr_in address;
     address.sin_family = AF_INET;
