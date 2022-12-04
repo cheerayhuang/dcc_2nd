@@ -16,6 +16,7 @@
 
 DEFINE_int32(jobs, 1, "Specifies the number of jobs (threads) to run simultaneously.");
 DEFINE_int32(port, 10049, "Specifies the remote hosts' port.");
+DEFINE_int32(file_rows, 1, "Specifies the total rows of the arrow file.");
 DEFINE_string(file_path, "data.recv.arrow", "Specifies  the file path of the arrow file.");
 DEFINE_string(remote, "127.0.0.1", "Specifies the remote(Sender) hosts' IP.");
 
@@ -26,7 +27,11 @@ int main(int argc, char**argv) {
 
     spdlog::set_pattern("[recv %t] %+ ");
     spdlog::set_level(spdlog::level::info);
+    spdlog::flush_every(std::chrono::seconds(2));
 
+    ZSTDDecompressUtil::Init();
+    Server::Run(FLAGS_port);
+    ZSTDDecompressUtil::Destory();
 
 
     SPDLOG_INFO("hello world!");

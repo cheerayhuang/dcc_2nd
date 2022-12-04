@@ -16,6 +16,10 @@ public:
 
         spdlog::info("open file {}, fd={}", file_path, fd);
 
-        return std::make_tuple(static_cast<char*>(mmap(NULL, statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0)), statbuf.st_size);
+        auto res = std::make_tuple(static_cast<char*>(mmap(NULL, statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0)), statbuf.st_size);
+
+        close(fd);
+
+        return res;
     }
 };

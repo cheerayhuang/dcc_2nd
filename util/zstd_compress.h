@@ -35,7 +35,7 @@ private:
     static compress_args_t *args_;
     static int zstd_thread_num_;
 
-    static ZSTD_CCtx * cctx_;
+    //static ZSTD_CCtx * cctx_;
 
 #if defined(ZSTD_STATIC_LINKING_ONLY)
     static ZSTD_threadPool *pool_;
@@ -61,11 +61,22 @@ public:
 #endif
         zstd_thread_num_ = 2;
 
+        /*
         cctx_ = ZSTD_createCCtx();
         if (cctx_ == nullptr) {
             SPDLOG_ERROR("Create zstd context obj failed.");
             return -1;
         }
+
+        if (auto r = ZSTD_CCtx_setParameter(cctx_, ZSTD_c_compressionLevel, args_->c_level); ZSTD_isError(r)) {
+            SPDLOG_ERROR("Set zstd context failed: set compress level, {}.", ZSTD_getErrorName(r));
+            return -1;
+        }
+
+        if (auto r = ZSTD_CCtx_setParameter(cctx_, ZSTD_c_checksumFlag, 0); ZSTD_isError(r)) {
+            SPDLOG_ERROR("Set zstd context failed: disable checksum, {}", ZSTD_getErrorName(r));
+            return -1;
+        }*/
 
         return 0;
     }
@@ -77,7 +88,7 @@ public:
 #endif
 
         free(args_);
-        ZSTD_freeCCtx(cctx_);
+        //ZSTD_freeCCtx(cctx_);
 
         return 0;
     }
@@ -85,6 +96,7 @@ public:
     static void* Compress(std::shared_ptr<FileSlice> slice) {
         size_t buff_out_size = 4 * 1024 * 1024;
         size_t buff_in_size = static_cast<size_t>(6.5 * 1024 * 1024);
+
 
         if (slice->len() < 1024 * 1024) {
             buff_in_size = ZSTD_CStreamInSize();
@@ -94,22 +106,31 @@ public:
         const void*  const buff_in = slice->GetBuf();
 
 #if defined(ZSTD_STATIC_LINKING_ONLY)
+        /*
         if (auto r = ZSTD_CCtx_refThreadPool(cctx_, args_->pool); ZSTD_isError(r)) {
             SPDLOG_ERROR("Set zstd context failed: set threadpool, {}", ZSTD_getErrorName(r));
             free(buff_out);
             return nullptr;
-        }
+        }*/
 #endif
-
-        if (auto r = ZSTD_CCtx_setParameter(cctx_, ZSTD_c_compressionLevel, args_->c_level); ZSTD_isError(r)) {
-            SPDLOG_ERROR("Set zstd context failed: set compress level, {}.", ZSTD_getErrorName(r));
+        ZSTD_CCtx* const cctx = ZSTD_createCCtx();
+        if (cctx == nullptr) {
+            SPDLOG_ERROR("Create zstd context obj failed.");
             free(buff_out);
             return nullptr;
         }
 
-        if (auto r = ZSTD_CCtx_setParameter(cctx_, ZSTD_c_checksumFlag, 0); ZSTD_isError(r)) {
+        if (auto r = ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, args_->c_level); ZSTD_isError(r)) {
+            SPDLOG_ERROR("Set zstd context failed: set compress level, {}.", ZSTD_getErrorName(r));
+            free(buff_out);
+            ZSTD_freeCCtx(cctx);
+            return nullptr;
+        }
+
+        if (auto r = ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 0); ZSTD_isError(r)) {
             SPDLOG_ERROR("Set zstd context failed: disable checksum, {}", ZSTD_getErrorName(r));
             free(buff_out);
+            ZSTD_freeCCtx(cctx);
             return nullptr;
         }
 
@@ -141,10 +162,11 @@ public:
                  * buffer next iteration.
                  */
                 ZSTD_outBuffer output = {buff_out, buff_out_size, 0};
-                const size_t remaining = ZSTD_compressStream2(cctx_, &output , &input, mode);
+                const size_t remaining = ZSTD_compressStream2(cctx, &output , &input, mode);
                 if (ZSTD_isError(remaining)) {
                     SPDLOG_ERROR("ZSTD compress failed: {}", ZSTD_getErrorName(remaining));
                     free(buff_out);
+                    ZSTD_freeCCtx(cctx);
                     return nullptr;
                 }
 
@@ -167,12 +189,14 @@ public:
             index += act_buff_in_size;
         }
 
+        ZSTD_freeCCtx(cctx);
+
         return buff_out;
     }
 
 };
 
-ZSTD_CCtx * ZSTDCompressUtil::cctx_ = nullptr;
+//ZSTD_CCtx * ZSTDCompressUtil::cctx_ = nullptr;
 compress_args_t * ZSTDCompressUtil::args_ = nullptr;
 int ZSTDCompressUtil::zstd_thread_num_ = 0;
 

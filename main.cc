@@ -28,6 +28,7 @@ int main(int argc, char**argv) {
 
     spdlog::set_pattern("[send %t] %+ ");
     spdlog::set_level(spdlog::level::info);
+    spdlog::flush_every(std::chrono::seconds(2));
 
     if (FLAGS_gen_file) {
         spdlog::info("begin to gen data file: {}, {}rows.", FLAGS_file_path, FLAGS_file_rows);
@@ -39,8 +40,9 @@ int main(int argc, char**argv) {
         /*
          * read arrow file and verify it.
          */
-        auto colValue = ArrowUtil::readDataFromFile(FLAGS_file_path, FLAGS_file_rows);
+        //auto colValue = ArrowUtil::readDataFromFile(FLAGS_file_path, FLAGS_file_rows);
 
+        /*
         std::cout << std::setiosflags(std::ios::fixed) << std::setprecision(2);
         for (auto i = 0; i < FLAGS_file_rows; ++i) {
             std::cout << colValue->stringVal1[i]
@@ -48,15 +50,17 @@ int main(int argc, char**argv) {
                 << " " << colValue->doubles[i]
                 << " " << colValue->stringVal2[i]
                 << std::endl;
-        }
+        }*/
 
-        auto validResult = ValidUtil::getValidResult(
+        /*auto validResult = ValidUtil::getValidResult(
             colValue->stringVal1.get(),
             colValue->intVal.get(),
             colValue->doubles.get(),
             colValue->stringVal2.get(),
             colValue->total
-        );
+        );*/
+        auto validResult = ValidUtil::getValidResult(FLAGS_file_path, FLAGS_file_rows);
+
         SPDLOG_WARN("{}", validResult);
         return 0;
     }
@@ -67,10 +71,11 @@ int main(int argc, char**argv) {
 
 
     auto g_thread_pool = std::make_unique<ThreadPool>(FLAGS_jobs+1);
+    std::vector<std::future<void>> future_res;
 
     // count time
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-    g_thread_pool->enqueue(SendingFlow::Supervise, start);
+    auto r_supervisor = g_thread_pool->enqueue(SendingFlow::Supervise, start);
 
     // split file
     auto file_slices = FileSlice::SplitFile(g_mmap_file_buff, g_file_size);
@@ -81,7 +86,6 @@ int main(int argc, char**argv) {
         SPDLOG_ERROR("Init sending flow failed.");
         return -1;
     }
-    std::vector<std::future<void>> future_res;
     for(auto && f : file_slices) {
         SPDLOG_INFO("slice info: index={}, len={}", f->index(), f->len());
         future_res.push_back( g_thread_pool->enqueue(&SendingFlow::Run, f) );
@@ -89,9 +93,12 @@ int main(int argc, char**argv) {
     SendingFlow::Destory();
 
     for (auto && r : future_res) {
+        SPDLOG_INFO("Waiting future...");
         r.get();
     }
-    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    SPDLOG_INFO("Waiting Supervisor future...");
+    r_supervisor.get();
+    //std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
 
     // --
     // test for zstd compress

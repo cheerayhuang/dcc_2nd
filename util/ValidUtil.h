@@ -3,6 +3,8 @@
 #include <string>
 #include <stdexcept>
 
+#include "ArrowUtil.h"
+
 template <typename ...Args>
 std::string string_format(const std::string& format, Args... args) {
     int size_s = std::snprintf(nullptr, 0, format.c_str(), args...) + 1;
@@ -19,17 +21,29 @@ std::string string_format(const std::string& format, Args... args) {
 class ValidUtil {
 public:
     static std::string getValidResult(std::string strings1[], int ints[], double doubles[], std::string strings2[], long total) {
-        return "string1:" + ValidStringArray(strings1, total) +
+        return "strings1: " + ValidStringArray(strings1, total) +
                 ", ints: " + ValidIntArray(ints, total) +
                 ", doubles: " + ValidDoubleArray(doubles, total) +
                 ", strings2: " + ValidStringArray(strings2, total);
     }
 
+    static std::string getValidResult(const std::string &filePath, int fileRows) {
+
+        auto colValue = ArrowUtil::readDataFromFile(filePath, fileRows);
+
+        return ValidUtil::getValidResult(
+            colValue->stringVal1.get(),
+            colValue->intVal.get(),
+            colValue->doubles.get(),
+            colValue->stringVal2.get(),
+            colValue->total
+        );
+    }
+
 
 private:
 
-    //static const int STEP = 100000;
-    static const int STEP = 10;
+    static const int STEP = 100000;
 
     static std::string ValidIntArray(const int ints[], long total) {
         int sum = 0;

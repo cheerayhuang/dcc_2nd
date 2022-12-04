@@ -20,33 +20,50 @@
 class ZSTDDecompressUtil {
 
 private:
-    static ZSTD_DCtx *dctx_;
+    //static ZSTD_DCtx *dctx_;
 
 public:
 
     static int Init() {
+        /*
         dctx_ = ZSTD_createDCtx();
         if (dctx_ == nullptr) {
             SPDLOG_ERROR("Create zstd D context obj failed.");
             return -1;
-        }
+        }*/
 
         return 0;
     }
 
     static int Destory() {
-        ZSTD_freeDCtx(dctx_);
+        //ZSTD_freeDCtx(dctx_);
 
         return 0;
     }
 
 
-    static int Decompress(char *in_buf, size_t in_buf_size, char* out_buf, size_t out_buf_size) {
+    static int Decompress(char *in_buf, size_t in_buf_size, char* out_buf, size_t out_buf_size = 0) {
+        ZSTD_DCtx * const dctx = ZSTD_createDCtx();
+        if (dctx == nullptr) {
+            SPDLOG_ERROR("Create zstd D context obj failed.");
+            return -1;
+        }
+
+        bool is_whole_slice = (out_buf_size != 0 ? true : false);
+
+        if (out_buf_size == 0) {
+            out_buf_size = ZSTD_DStreamOutSize();
+        }
+
         ZSTD_inBuffer input = {in_buf, in_buf_size, 0};
         size_t out_index = 0;
         while (input.pos < input.size) {
             ZSTD_outBuffer output = {out_buf+out_index, out_buf_size, 0};
-            size_t const ret = ZSTD_decompressStream(dctx_, &output, &input);
+            if (is_whole_slice) {
+                output.size = out_buf_size - out_index;
+            }
+
+            size_t const ret = ZSTD_decompressStream(dctx, &output, &input);
             if (ZSTD_isError(ret)) {
                     SPDLOG_ERROR("ZSTD decompress failed: {}", ZSTD_getErrorName(ret));
                     return -1;
@@ -59,4 +76,4 @@ public:
 
 };
 
-ZSTD_DCtx* ZSTDDecompressUtil::dctx_ = nullptr;
+//ZSTD_DCtx* ZSTDDecompressUtil::dctx_ = nullptr;

@@ -26,6 +26,8 @@ DECLARE_int32(port);
 
 class SendingFlow {
 public:
+    static const int kEachSliceHeaderLen = 10;
+
     SendingFlow() = delete;
 
     static const size_t kMaxTCPSendBuff = 4 * 1024 * 1024;
@@ -59,6 +61,8 @@ public:
         if (auto r = SendFileSlice(slice); r != 0) {
             return ;
         }
+
+        return ;
     }
 
     static int SendFileSlice(std::shared_ptr<FileSlice> slice) {
@@ -67,43 +71,53 @@ public:
         auto remote_addr = SockFactory::GetRemoteAddr(FLAGS_remote, FLAGS_port);
         auto fd = socket(AF_INET, SOCK_STREAM, 0);
 
+
         if (auto r = connect(fd, remote_addr, sizeof(*remote_addr)); r == -1) {
             SPDLOG_ERROR("Connect to server to send file slice failed.");
             close(fd);
             return -1;
         }
 
+        Server::SetNonBlocking(fd);
+
         size_t sum_sent = 0;
         for (auto && c : chunks) {
-            if (c.len_ < kMaxTCPSendBuff) {
-                if (write(fd, c.c_, c.len_) == -1) {
-                    SPDLOG_ERROR("Send file slice at once failed: {} bytes.", c.len_);
-                    close(fd);
-                    return -1;
-                }
-                sum_sent += c.len_;
-                continue;
-            }
-
-            size_t index = 0;
+            auto size = c.len_;
+            auto w_index = 0;
             do {
-                auto act_wr_size = (index + kMaxTCPSendBuff > c.len_) ? (c.len_ - index) : kMaxTCPSendBuff;
-                if (write(fd, c.c_+index, act_wr_size) == -1) {
-                    SPDLOG_ERROR("Send file slice circularly failed: {} bytes.");
+                auto num_write = write(fd, c.c_+w_index, size-w_index);
+                if (Server::IsSocketError(num_write)) {
+                    SPDLOG_ERROR("Send file slice failed.");
                     close(fd);
                     return -1;
                 }
-                index += act_wr_size;
-                sum_sent += act_wr_size;
-            } while(index < c.len_);
+
+                if (num_write == 0) {
+                    SPDLOG_INFO("Send file slice: Already sent {} bytes, len {}, the fd is exhausted.", w_index, size);
+                    break;
+                }
+
+                /*
+                if (num_write == -1 && errno == EINTR) {
+                    continue;
+                }*/
+
+                if (num_write == -1) {
+                    //SPDLOG_ERROR("Send file slice failed: EAGAIN or EWOULDBLOCK, already sent {} bytes, len {}.", w_index, size);
+                    //break;
+                    continue;
+                }
+                sum_sent += num_write;
+                w_index += num_write;
+            } while (size - w_index > 0);
         }
 
-        if (sum_sent != slice->c_len()) {
+        if (sum_sent - kEachSliceHeaderLen != slice->c_len()) {
             SPDLOG_ERROR("Send slice failed: compress len {} != {} bytes sent.", slice->c_len(), sum_sent);
             close(fd);
             return -1;
         }
-        SPDLOG_INFO("Send slice finished. Info: index {}, len {}, c_len {}, sum sent {}.", slice->index(), slice->len(), slice->c_len(), sum_sent);
+        SPDLOG_INFO("Send slice finished. Info: index {}, len {}, c_len {}, sum sent {}(including 10 bytes Slice Headers).", slice->index(), slice->len(), slice->c_len(), sum_sent);
 
         close(fd);
         return 0;
@@ -112,21 +126,50 @@ public:
     static int SendFileSizeOnly(size_t file_size, unsigned short slices_num) {
         auto remote_addr = SockFactory::GetRemoteAddr(FLAGS_remote, FLAGS_port);
         auto fd = socket(AF_INET, SOCK_STREAM, 0);
+        SPDLOG_INFO("fd {} for sending header.", fd);
+
 
         if (auto r = connect(fd, remote_addr, sizeof(*remote_addr)); r == -1) {
             SPDLOG_ERROR("Connect to server to send file size failed.");
             close(fd);
             return -1;
         }
+        Server::SetNonBlocking(fd);
 
         std::ostringstream header_file_size;
         header_file_size << "S" << file_size << "#" << slices_num;
-        if (write(fd, header_file_size.str().c_str(), header_file_size.str().size()) == -1) {
-            SPDLOG_ERROR("Send file size header failed.");
-            close(fd);
-            return -1;
-        }
+        SPDLOG_INFO("Sending FIle Header: {}, size: {}.", header_file_size.str(), header_file_size.str().size());
 
+        auto h = header_file_size.str().c_str();
+        auto w_size = header_file_size.str().size();
+        size_t w_index = 0;
+
+        do {
+            auto num_write = write(fd, h+w_index, w_size-w_index);
+
+            if (Server::IsSocketError(num_write)) {
+                SPDLOG_ERROR("Send file size header failed.");
+                close(fd);
+                return -1;
+            }
+
+            if (num_write == 0) {
+                SPDLOG_INFO("Send HEADER: Already sent {} bytes, the fd is exhausted.", w_index);
+                break;
+            }
+
+            if (num_write == -1 && errno == EINTR) {
+                continue;
+            }
+
+            if (num_write == -1) {
+                SPDLOG_ERROR("Send HEADER failed(maybe END): EAGAIN or EWOULDBLOCKi, already sent {} bytes.", w_index);
+                break;
+            }
+            w_index += num_write;
+        } while (w_size - w_index > 0);
+
+        SPDLOG_INFO("Sending HEADER Finished.");
         close(fd);
 
         return 0;
@@ -138,6 +181,9 @@ public:
 
         epoll_event events[2];
 
+        const int kSupvervisorInfoBuffSize = 512;
+        char *read_buf = static_cast<char*>(malloc(kSupvervisorInfoBuffSize));
+
         for (;;) {
             auto num_fds = epoll_wait(epoll_fd, events, 2, -1);
             if (num_fds == -1) {
@@ -148,15 +194,13 @@ public:
             }
             SPDLOG_INFO("{} fds are active.", num_fds);
 
-            const int kSupvervisorInfoBuffSize = 512;
-            char *read_buf = static_cast<char*>(malloc(kSupvervisorInfoBuffSize));
-
             for (auto i = 0; i < num_fds; ++i) {
-                //SPDLOG_INFO("active fd {} == listen_fd {}.", events[i].data.fd, listen_fd);
+                SPDLOG_INFO("active fd {}, listen_fd {}.", events[i].data.fd, listen_fd);
 
                 if (events[i].data.fd == listen_fd && (events[i].events & EPOLLIN)) {
                     // non-blocking accept
-                    while(auto conn_fd = accept(listen_fd, nullptr, nullptr) > 0) {
+                    int conn_fd;
+                    while((conn_fd = accept(listen_fd, nullptr, nullptr)) > 0) {
                         epoll_event ev;
                         ev.events = EPOLLIN | EPOLLET;
                         ev.data.fd = conn_fd;
@@ -168,6 +212,8 @@ public:
                             close(epoll_fd);
                             return  -1;
                         }
+
+                        Server::SetNonBlocking(conn_fd);
                     }
                 } else if (events[i].events & EPOLLIN) {
                     auto conn_fd = events[i].data.fd;
@@ -207,13 +253,22 @@ public:
                     }
 
                     std::string_view res{read_buf, static_cast<size_t>(num_read)};
+                    SPDLOG_INFO("Supervisor res: {}", res);
 
-                    if (res.find("END.\n") != std::string::npos) {
+                    if (res.find("E") != std::string::npos) {
                         time_point end = std::chrono::steady_clock::now();
                         SPDLOG_WARN("[duration:{}]", std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()/1000);
                         res = res.substr(5);
                     }
-                    SPDLOG_WARN("[validString:{}]", res);
+                    if (res.find("strings2:") != std::string::npos) {
+                        SPDLOG_WARN("[validString:{}]", res);
+                        free(read_buf);
+                        close(conn_fd);
+                        close(listen_fd);
+                        close(epoll_fd);
+
+                        return 0;
+                    }
                 }
             }
         }
