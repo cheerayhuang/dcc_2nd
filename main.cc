@@ -27,7 +27,8 @@ int main(int argc, char**argv) {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
     spdlog::set_pattern("[send %t] %+ ");
-    spdlog::set_level(spdlog::level::info);
+    //spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::warn);
     spdlog::flush_every(std::chrono::seconds(2));
 
     if (FLAGS_gen_file) {

@@ -88,6 +88,7 @@ public:
                 auto num_write = write(fd, c.c_+w_index, size-w_index);
                 if (Server::IsSocketError(num_write)) {
                     SPDLOG_ERROR("Send file slice failed.");
+                    perror("write() failed");
                     close(fd);
                     return -1;
                 }

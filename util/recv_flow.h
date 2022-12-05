@@ -125,11 +125,6 @@ public:
         auto fd = socket(AF_INET, SOCK_STREAM, 0);
         auto remote_addr = SockFactory::GetRemoteAddr(FLAGS_remote, 10050);
 
-        /*
-        do {
-        } while((slices_th_num_ < slices_num_+1 && slices_num_ != 0) || (slices_num_ == 0));
-        */
-
         {
             std::unique_lock lk(supervisor_m_);
             supervisor_cv_.wait(
@@ -184,6 +179,7 @@ public:
 
         if (start_ != nullptr) {
             MMapWriter::UnMapOutputArrowFile(start_, file_size_);
+            free(start_);
         }
 
         return 0;
@@ -257,17 +253,28 @@ public:
                 continue;
             }
 
+            size_t cur_read_rest = 0;
+
             if (is_first_recv && split_len_ == 0 && start_ == nullptr) {
                 reads_max_bytes_ = kFileSliceHeaderLen + 1;
                 read_buf = static_cast<char*>(malloc(reads_max_bytes_));
-            } else {
+            } else if (is_first_recv) {
                 read_buf = static_cast<char*>(malloc(reads_max_bytes_));
+            } else {
+                read_buf = mmap_[index]->c_buf_ + mmap_[index]->offset_;
+                if (mmap_[index]->c_len_ - mmap_[index]->offset_ < reads_max_bytes_) {
+                    cur_read_rest = mmap_[index]->c_len_ - mmap_[index]->offset_;
+                }
             }
 
             ssize_t num_read = 0;
             ssize_t read_index = 0;
+            size_t n_left = reads_max_bytes_;
+            if (cur_read_rest != 0) {
+                n_left = cur_read_rest;
+            }
             do {
-                num_read = read(conn_fd, read_buf + read_index, reads_max_bytes_ - read_index);
+                num_read = read(conn_fd, read_buf + read_index, n_left-read_index);
                 if (IsSocketError(num_read)) {
                     SPDLOG_ERROR("read file slice failed. perror():");
                     perror("\t read() failed");
@@ -282,13 +289,13 @@ public:
 
                 // EAGAIN or EWOULDBLOCK
                 if (num_read == -1) {
-                    perror("read() failed");
+                    //perror("read() failed");
                     break;
                 }
 
                 read_index += num_read;
                 //SPDLOG_INFO("read() has already {} bytes. This time it reads {} bytes.", read_index, num_read);
-            } while(reads_max_bytes_ - read_index > 0 && num_read != 0);
+            } while(n_left - read_index > 0 && num_read != 0);
             num_read = read_index;
             if (num_read < reads_max_bytes_) {
                 SPDLOG_INFO("The conn_fd for reading is exhausted.");
@@ -311,11 +318,12 @@ public:
                     slices_num_ = std::stoul(header_str.substr(pos+1));
                     split_len_ = file_size_ / slices_num_;
 
-                    if (split_len_ > 1024*1024) {
+                    if (split_len_ >= 6 * 1024*1024) {
                         reads_max_bytes_ = 6 * 1024 * 1024;
                     } else {
                         reads_max_bytes_ = 128 * 1024;
                     }
+
                     //read_buf = static_cast<char*>(malloc(reads_max_bytes_));
 
                     start_.store(MMapWriter::MMapOutputArrowFile(FLAGS_file_path, file_size_));
@@ -335,10 +343,6 @@ public:
                 close(epoll_recv_fd);
                 return 0;
             }
-
-            char *in_buf = nullptr;
-            char *out_buf = nullptr;
-            size_t in_buf_size, out_buf_size;
 
             if (is_first_recv) {
                 // unmarshal file slice header.
@@ -361,37 +365,27 @@ public:
                 f_info->c_len_ = static_cast<size_t>(ntohl(h4));
 
                 f_info->buf_ = start_ + index * split_len_;
+                f_info->c_buf_ = nullptr;
                 f_info->c_buf_ = static_cast<char*>(malloc(f_info->c_len_));
 
                 mmap_[index] = f_info;
                 if (num_read == kEachSliceHeaderLen) {
+                    SPDLOG_INFO("Read Slice Header Finished. {}", (mmap_[index]->c_buf_ != nullptr));
+                    free(read_buf);
                     continue;
                 }
-                in_buf = read_buf + kEachSliceHeaderLen;
-                in_buf_size = num_read - kEachSliceHeaderLen;
-                mmap_[index]->recv_len_ += in_buf_size;
+
+                memcpy(mmap_[index]->c_buf_, read_buf+kEachSliceHeaderLen, num_read-kEachSliceHeaderLen);
+                num_read -= kEachSliceHeaderLen;
+
+                free(read_buf);
             }
 
-            if (in_buf == nullptr) {
-                in_buf = read_buf;
-                in_buf_size = num_read;
-                mmap_[index]->recv_len_ += num_read;
-            }
-
-            if (out_buf == nullptr) {
-                out_buf = mmap_[index]->c_buf_ + mmap_[index]->offset_;
-                /*
-                out_buf_size = static_cast<size_t>(in_buf_size / 0.615);
-                if (out_buf_size > mmap_[index]->len_ - mmap_[index]->offset_) {
-                    out_buf_size = mmap_[index]->len_ - mmap_[index]->offset_;
-                }*/
-            }
-            memcpy(out_buf, in_buf, in_buf_size);
-            mmap_[index]->offset_ += in_buf_size;
+            mmap_[index]->offset_ += num_read;
 
             // recv file slice Finished.
-            if (mmap_[index]->c_len_ == mmap_[index]->recv_len_) {
-                SPDLOG_INFO("Recv File Slice FINISHED, Info: index {}, offset {}, split_len {}, len {}, c_len {}, recv_len{}", index, mmap_[index]->offset_, split_len_, mmap_[index]->len_, mmap_[index]->c_len_, mmap_[index]->recv_len_);
+            if (mmap_[index]->c_len_ == mmap_[index]->offset_) {
+                SPDLOG_INFO("Recv File Slice FINISHED, Info: index {}, offset {}, split_len {}, len {}, c_len {}", index, mmap_[index]->offset_, split_len_, mmap_[index]->len_, mmap_[index]->c_len_);
                 auto act_wr_size = ZSTDDecompressUtil::Decompress(
                     mmap_[index]->c_buf_,
                     mmap_[index]->c_len_,
@@ -399,19 +393,17 @@ public:
                     mmap_[index]->len_
                 );
                 if (act_wr_size == -1) {
-                    SPDLOG_ERROR("Decompress stream failed. File Slice Info: index {}, offset {}, split_len {}, len {}, c_len {}, recv_len{}", mmap_[index]->index_, mmap_[index]->offset_, split_len_, mmap_[index]->len_, mmap_[index]->c_len_, mmap_[index]->recv_len_);
-                    free(read_buf);
+                    SPDLOG_ERROR("Decompress stream failed. File Slice Info: index {}, offset {}, split_len {}, len {}, c_len {}", mmap_[index]->index_, mmap_[index]->offset_, split_len_, mmap_[index]->len_, mmap_[index]->c_len_);
                     close(conn_fd);
                     close(epoll_recv_fd);
                     return -1;
                 }
                 if (act_wr_size == mmap_[index]->len_) {
-                    SPDLOG_INFO("Decompress File Slice FINISHED, Info: index {}, offset {}, split_len {}, len {}, c_len {}, recv_len{}", index, mmap_[index]->offset_, split_len_, mmap_[index]->len_, mmap_[index]->c_len_, mmap_[index]->recv_len_);
+                    SPDLOG_INFO("Decompress File Slice FINISHED, Info: index {}, offset {}, split_len {}, len {}, c_len {}", index, mmap_[index]->offset_, split_len_, mmap_[index]->len_, mmap_[index]->c_len_);
                     MMapWriter::MMapSync(mmap_[index]->buf_, act_wr_size, MS_ASYNC);
                     break;
                 } else {
                     SPDLOG_ERROR("Decompress File Slice Failed. file slice size {} != {} decompressed size.", mmap_[index]->len_, act_wr_size);
-                    free(read_buf);
                     close(conn_fd);
                     close(epoll_recv_fd);
                     return -1;
@@ -419,7 +411,6 @@ public:
             }
         }
 
-        free(read_buf);
         close(conn_fd);
         close(epoll_recv_fd);
 

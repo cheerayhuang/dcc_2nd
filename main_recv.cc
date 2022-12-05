@@ -26,7 +26,8 @@ int main(int argc, char**argv) {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
     spdlog::set_pattern("[recv %t] %+ ");
-    spdlog::set_level(spdlog::level::info);
+    //spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::warn);
     spdlog::flush_every(std::chrono::seconds(2));
 
     ZSTDDecompressUtil::Init();
